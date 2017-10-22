@@ -1,0 +1,411 @@
+#!/usr/bin/python3
+
+ 
+import json
+from collections import OrderedDict
+import sys
+import subprocess
+import re
+ 
+## Another json parser to checkout: https://github.com/mewwts/addict/tree/master/addict ###
+
+####################################### Global Variables ########################################
+config_file = '/home/redhat/AWS/config_data/testfile.cfg'
+aws_services_full_list = '/home/redhat/AWS/aws_services.lst'
+
+
+'''
+AWS info:
+Complete list of AWS resources: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html
+
+'''
+
+ 
+
+
+#######################      This parser reads through the json file and tries to find out the type of resource under Resources.   ####################
+
+'''
+
+# Parse command line Arg.
+if (len(sys.argv) != 2):
+	print ("Incorrect usage!")
+	print ("usage: # <script name> <json file>")
+	exit (1)
+else:
+	print ("JSON to parse:", sys.argv[1])	
+
+'''    
+
+# Open the sample.json file.
+try:
+    with open('EB_in_VPC_template', 'r') as js:
+        data = (json.load(js, object_pairs_hook=OrderedDict))
+        #data = OrderedDict(json.load(js))
+        #print data
+
+except (ValueError, KeyError, TypeError):
+    print ("JSON format error")
+
+except IOError as e:
+    print ("I/O error({0}): {1}".format(e.errno, e.strerror))
+
+except:
+    print ("Unexpected error:", sys.exc_info()[0])
+    raise
+
+ 
+# Display the keys under "Resources"
+#for k, v in data["Resources"].items():         # Does the same thing as above.
+#        print k
+
+#for k in data["Resources"]:
+#       print k
+
+# Till this point we are able to list the resources but their names can be mislesding, hence we MUST gather more information from "Type".
+# Lets define a List and save those keys in there. Makes it easy to iterate.
+# AWS resources in JSON file is formatted as: AWS::aws-product-name::data-type-name
+
+ 
+resource_list = []
+for k, v in data["Resources"].items():
+    if (k):
+        resource_list.append(k)
+
+print ("\n")
+
+
+'''
+for index, item in enumerate(resource_list):
+    if (item):
+        # We have to covert unicode to string, then split (delim set to '::') which converts it into a list. Print the last element in the list.
+        # print (index,".", item, "is a", (str(data["Resources"][item]["Type"])).split("::", 2)[-1])
+        print (item, (str(data["Resources"][item]["Type"])))
+
+'''
+
+# Create a array with each element is a combination of resources and resource types. 
+res_res_type=[]
+res_res_type_str=""
+for item in (resource_list):
+	if (item):
+		res_type = (str(data["Resources"][item]["Type"]))
+		#res_res_type.append("["+item+"]"+" "+ "["+res_type+"]")
+		res_res_type.append(item +" "+ res_type)
+		res_res_type_str += item +" "+ res_type + "\t"
+        
+'''
+print ("\n\nprinting [resource][resource type]")
+for i in (res_res_type):
+    print (i)
+
+print (res_res_type_str)
+'''
+
+
+
+
+ 
+# Open config_file to write
+#global config_file
+#_file = open(config_file, 'a')
+
+def errhandler ():
+   print(item,": is not a recognized service!")
+
+
+def _get_VPC ():
+	if ('AWS::EC2::VPC' in item):
+		#resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		#_file.write (resource_name+"\n")
+		vpc = (resource_name + "|" + resource_type + "|" + "StackID:" + (data["Resources"]["VPC"]["Properties"]["Tags"][0]["Value"]["Ref"]))
+		print (vpc)
+
+def _get_VPC_StackID ():
+    
+    #This function collects details of each VPC found in AWS template and feeds simplified data to config_file
+    
+    #global config_file
+    #with open (config_file, 'w') as _file:
+    if ("VPC" in data["Resources"]):
+        if (data["Resources"]["VPC"]["Type"] == "AWS::EC2::VPC"):
+            # Gather Stack ID of the VPC, that forms the pillar for one particular stack.
+            #config_file.write(data["Resources"]["VPC"]["Type"]
+            #_file.write (data["Resources"]["VPC"]["Properties"]["Tags"][0]["Value"]["Ref"]+"\n")
+            print (data["Resources"]["VPC"]["Properties"]["Tags"][0]["Value"]["Ref"]+"\n")
+
+def _get_Subnet (): 
+	#for item in (res_res_type):
+	if ("AWS::EC2::Subnet" in item):		
+		#resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		#print ("\n\n", resource_name)
+		#_file.write (resource_name + ":" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+		print (resource_name + "|" + resource_type  + "|" + data["Resources"][resource_name] ["Properties"]["CidrBlock"]["Fn::FindInMap"][1] + "|" + data["Resources"][resource_name] \
+		["Properties"]["VpcId"]["Ref"])
+
+def _get_subnet_nacl_assn ():
+	if ("AWS::EC2::SubnetNetworkAclAssociation" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		subnetid = (data["Resources"][resource_name]["Properties"]["SubnetId"]["Ref"])
+		networkaclid = (data["Resources"][resource_name]["Properties"]["NetworkAclId"]["Ref"])
+		print (resource_name + "|" + resource_type + "|" + "SubnetId:" + subnetid + "|" + "NetworkAclId:" + networkaclid)
+
+
+def _get_InternetGateway ():
+	if ("AWS::EC2::InternetGateway" in item):
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		print (resource_name + "|" + resource_type + "|")
+
+def _get_InternetGateway_Attachment ():
+	if ("AWS::EC2::VPCGatewayAttachment" in  item):
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		print (resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+
+def _get_RouteTable ():
+	if ("AWS::EC2::RouteTable" in item):
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		print (resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+	
+def _get_Route ():
+	if ("AWS::EC2::Route" in item):
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		routetable_str = resource_name + "|" + resource_type + "|"
+		for i in data["Resources"][resource_name].items():
+			if ("DependsOn" in i):
+				routetable_str += "DependsOn:" + data["Resources"][resource_name]["DependsOn"] + "|" + "GatewayId:" + data["Resources"][resource_name]["Properties"]["GatewayId"]["Ref"] + "|"	
+				#print (routetable_str)
+			
+		rtid = data["Resources"][resource_name]["Properties"]["RouteTableId"]["Ref"]
+		routetable_str += rtid
+		print (routetable_str)
+
+
+def _get_Route_Assn ():
+	if ("AWS::EC2::SubnetRouteTableAssociation" in item):
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		route_assn = resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["SubnetId"]["Ref"] + "|" + data["Resources"][resource_name]["Properties"] \
+		["RouteTableId"]["Ref"]
+		print (route_assn)
+
+def _get_NetworkAcl ():
+	if ("AWS::EC2::NetworkAcl" in item):
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		nacl = resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"] + "|" + data["Resources"][resource_name]["Properties"]["Tags"][1]["Value"]
+		print (nacl)
+
+
+def _get_ElasticIP ():
+	if ("AWS::EC2::EIP" in  item):
+		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
+		for i in data["Resources"][resource_name].items():
+			if ("DependsOn" in i):
+				eip = resource_name + "|" + resource_type + "|" + "DependsOn:" + data["Resources"][resource_name]["DependsOn"] + "|" + "Attachedto:" + data["Resources"][resource_name] \
+				["Properties"]["InstanceId"]["Ref"] + "|" + "Domain:" + data["Resources"][resource_name]["Properties"]["Domain"]
+				print (eip)
+
+def _get_Instances ():
+	if (('AWS::EC2::Instance' in item) and ('NATDevice' not in item) and ('BastionHost' not in item)):
+		# If we have reached here, that means the stack contains at least one EC2 instance. This one counts in which subnet each one belongs to.
+		# Also 1 Subnet = 1 AZ. If we find EC2 instances part of more than one subnet - Won't work.
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		#resource_name = "WebServerInstance"
+		#print ("\n\n\n")
+		#print ((resource_name + "|" + resource_type + ":" + data["Resources"][resource_name]["Properties"]["NetworkInterfaces"][0]["SubnetId"]["Ref"]+"\n"))
+		for prop_list in (data["Resources"][resource_name]["Properties"].items()):
+			if ("NetworkInterfaces" in prop_list):
+				ec2_ni = (data["Resources"][resource_name]["Properties"]["NetworkInterfaces"][0]["Ref"])
+			else:
+				ec2_ni = ""		
+
+			if ("SecurityGroups" in prop_list):
+				for sg_count in range(len(data["Resources"][resource_name]["Properties"]["SecurityGroups"])):
+					ec2_sg += (data["Resources"][resource_name]["Properties"]["SecurityGroups"][sg_count]["Ref"]) + "|"
+			else:
+				ec2_sg = ""
+
+			if ("BlockDeviceMappings" in prop_list):
+				for ebs_count in range(len(data["Resources"][resource_name]["Properties"]["BlockDeviceMappings"])):
+					ebs_device += (data["Resources"][resource_name]["Properties"]["BlockDeviceMappings"][ebs_count]["DeviceName"]) + "|"				
+			else:
+				ebs_device = ""
+	
+		print (resource_name + "|" + resource_type + "|" + ec2_ni + "|" + ec2_sg + "|" + ebs_device)
+                
+	if ('NATDevice' in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		nd = (resource_name + "|" + resource_type + "|" + "Subnet:" + data["Resources"][resource_name]["Properties"]["SubnetId"]["Ref"] + "|" + "SecurityGroups:" + data["Resources"] \
+		[resource_name]["Properties"]["SecurityGroupIds"][0]["Ref"])
+		print (nd)
+                
+	if ('BastionHost' in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		bh = (resource_name + "|" + resource_type + "|" + "Subnet:" + data["Resources"][resource_name]["Properties"]["SubnetId"]["Ref"] + "|" + "SecurityGroups:" + data["Resources"] \
+		[resource_name]["Properties"]["SecurityGroupIds"][0]["Ref"])
+		print (bh)
+
+
+def _get_Security_Group ():
+	if ("AWS::EC2::SecurityGroup" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		sg = (resource_name + "|" + resource_type + "|" + "VPC:" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+		print (sg)
+
+
+def _get_Elastic_Beanstalk ():
+	if ("AWS::ElasticBeanstalk::Application" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		ebk = (resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["Description"])
+	
+	if ("AWS::ElasticBeanstalk::Environment" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		app_name = (data["Resources"][resource_name]["Properties"]["ApplicationName"]["Ref"])
+		env = (resource_name + "|" + resource_type + "|" + app_name + "|") 
+		for i in range(len(data["Resources"][resource_name]["Properties"]["OptionSettings"])):							# Traversing an array element in JSON.
+				#print (data["Resources"][resource_name]["Properties"]["OptionSettings"][i]["OptionName"])
+				if ("SSHSourceRestriction" in (data["Resources"][resource_name]["Properties"]["OptionSettings"][i]["OptionName"])):
+					#print (data["Resources"][resource_name]["Properties"]["OptionSettings"][i]["OptionName"], end=" ")
+					#"Namespace" : "aws:autoscaling:launchconfiguration", "OptionName" : "SSHSourceRestriction", "Value" : { "Fn::Join" : [ "", ["tcp,22,22,", { "Ref" : "BastionSecurityGroup" }]]}},
+					ssh_attrib_list = (data["Resources"][resource_name]["Properties"]["OptionSettings"][i]["Value"]["Fn::Join"][1])
+					ssh_sg = [elem['Ref'] for elem in ssh_attrib_list if 'Ref' in elem]
+					continue
+					#str_ssh_sg = ""
+					#str_ssh_sg = str(ssh_sg)
+					#env = env + str_ssh_sg + "|"
+
+				env += (data["Resources"][resource_name]["Properties"]["OptionSettings"][i]["OptionName"]) + ":"
+				env += (data["Resources"][resource_name]["Properties"]["OptionSettings"][i]["Value"]["Ref"]) + "|"
+			
+		print (env)
+
+
+def _get_ApplicationLB ():
+	if ("AWS::ElasticLoadBalancingV2::Listener" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		tg = (data["Resources"][resource_name]["Properties"]["DefaultActions"][0]["TargetGroupArn"]["Ref"])
+		type = (data["Resources"][resource_name]["Properties"]["DefaultActions"][0]["Type"])
+		arn =  (data["Resources"][resource_name]["Properties"]["LoadBalancerArn"]["Ref"])
+		print (resource_name + "|" + resource_type + "|" + type + "|" + tg + "|" + arn)
+
+ 
+
+def _get_ALBTargetGroup ():
+	if ("AWS::ElasticLoadBalancingV2::TargetGroup" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		vpcid = (data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+		print (resource_name + "|" + resource_type + "|" + vpcid)
+
+ 
+def _get_AutoScalingGroup ():
+	if ("AWS::AutoScaling::AutoScalingGroup" in item):
+		vpczoneid =""
+		tg = ""
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		for i in (data["Resources"][resource_name].items()):
+			if ("DependsOn" in i):
+				asg = "DependsOn:" + (data["Resources"][resource_name]["DependsOn"])
+			for j in range(len(data["Resources"][resource_name]["Properties"]["VPCZoneIdentifier"])):
+				vpczoneid = vpczoneid + (data["Resources"][resource_name]["Properties"]["VPCZoneIdentifier"][j]["Ref"])
+				lcn = (data["Resources"][resource_name]["Properties"]["LaunchConfigurationName"]["Ref"])
+				min = (data["Resources"][resource_name]["Properties"]["MinSize"])
+				max = (data["Resources"][resource_name]["Properties"]["MaxSize"]) 
+
+			for j in range(len(data["Resources"][resource_name]["Properties"]["TargetGroupARNs"])):
+				tg  = tg + (data["Resources"][resource_name]["Properties"]["TargetGroupARNs"][j]["Ref"])
+
+		print (resource_name + "|" + resource_type + "|" + "|" + asg + "|" + vpczoneid + "|" + lcn + "|" + min + "|" + max + "|" + tg)
+
+
+
+		
+
+
+takeaction =	{
+				"VPC"							: _get_VPC, 
+				"Subnet"						: _get_Subnet, 
+				"InternetGateway"				: _get_InternetGateway, 
+				"VPCGatewayAttachment"			: _get_InternetGateway_Attachment,
+				"RouteTable"					: _get_RouteTable,
+				"Route"							: _get_Route,
+				"SubnetRouteTableAssociation"	: _get_Route_Assn,
+				"NetworkAcl"					: _get_NetworkAcl,
+				"EIP"							: _get_ElasticIP,
+				"Instance"						: _get_Instances,
+				"SecurityGroup"					: _get_Security_Group,
+				"Environment"					: _get_Elastic_Beanstalk,
+				"Listener"						: _get_ApplicationLB,
+				"TargetGroup"					: _get_ALBTargetGroup,
+				"AutoScalingGroup"				: _get_AutoScalingGroup,
+				"SubnetNetworkAclAssociation"	: _get_subnet_nacl_assn
+				}
+
+for item in (res_res_type):
+	if (re.search (r'VPC$\b', item)):
+		#print (item)
+		vpc = ((item.split()[1]).split("::")[-1])
+		#print (vpc)
+		takeaction.get(vpc, errhandler)()
+	if (re.search (r'Subnet$\b', item)):									# Match
+		#print (item)
+		subnet = ((item.split()[1]).split("::")[-1])
+		#print (subnet)
+		takeaction.get(subnet, errhandler)()
+	if (re.search (r'InternetGateway\b', item)):
+		IG = ((item.split()[1]).split("::")[-1])			# Remember: IG's value must be the same as takeaction's Key. Its the value and not name of the variable that gets called!!
+		#print (IG)
+		takeaction.get(IG, errhandler)()
+	if (re.search (r'VPCGatewayAttachment$\b', item)):									# Match
+		vpcga = ((item.split()[1]).split("::")[-1])
+		takeaction.get(vpcga, errhandler)()	
+	if (re.search (r'RouteTable$\b', item)):
+		routetable = ((item.split()[1]).split("::")[-1])
+		takeaction.get(routetable, errhandler)()
+	if (re.search (r'Route$\b', item)):
+		rt = ((item.split()[1]).split("::")[-1])
+		takeaction.get(rt, errhandler)()
+	if (re.search (r'SubnetRouteTableAssociation$\b', item)):
+		sassn = ((item.split()[1]).split("::")[-1])
+		takeaction.get(sassn, errhandler)()
+	if (re.search (r'NetworkAcl$\b', item)):
+		nacl = ((item.split()[1]).split("::")[-1])
+		takeaction.get(nacl, errhandler)()
+	if (re.search (r'EIP$\b', item)):
+		eip = ((item.split()[1]).split("::")[-1])
+		takeaction.get(eip, errhandler)()
+	if (re.search (r'Instance$\b', item)):
+		ins = ((item.split()[1]).split("::")[-1])
+		takeaction.get(ins, errhandler)()
+	if (re.search (r'SecurityGroup$\b', item)):
+		sg = ((item.split()[1]).split("::")[-1])
+		takeaction.get(sg, errhandler)()
+	if (re.search (r'Environment$\b', item)):
+		se = ((item.split()[1]).split("::")[-1])
+		takeaction.get(se, errhandler)()
+	if (re.search (r'Listener$\b', item)):
+		se = ((item.split()[1]).split("::")[-1])
+		takeaction.get(se, errhandler)()
+	if (re.search (r'TargetGroup$\b', item)):
+		se = ((item.split()[1]).split("::")[-1])
+		takeaction.get(se, errhandler)()
+	if (re.search (r'AutoScalingGroup$\b', item)):
+		se = ((item.split()[1]).split("::")[-1])
+		takeaction.get(se, errhandler)()
+	if (re.search (r'SubnetNetworkAclAssociation$\b', item)):
+		se = ((item.split()[1]).split("::")[-1])
+		takeaction.get(se, errhandler)()
+
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
