@@ -212,9 +212,17 @@ def _get_InternetGateway ():
 		print (resource_name + "|" + resource_type + "|")
 
 def _get_InternetGateway_Attachment ():
+	vpc_id = vpn_gw_id = ""
 	if ("AWS::EC2::VPCGatewayAttachment" in  item):
 		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
-		print (resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+		if ("VpcId" in data["Resources"][resource_name]["Properties"]):
+			vpc_id = data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"]
+		if ("VpnGatewayId" in data["Resources"][resource_name]["Properties"]):
+			vpn_gw_id = data["Resources"][resource_name]["Properties"]["VpnGatewayId"]["Ref"]
+			print (resource_name + "|" + resource_type + "|" + vpc_id + "|" + vpn_gw_id)
+		else:
+			print (resource_name + "|" + resource_type + "|" + vpc_id)
+	
 
 def _get_RouteTable ():
 	if ("AWS::EC2::RouteTable" in item):
@@ -382,16 +390,26 @@ def _get_Elastic_Beanstalk ():
 
 
 def _get_ApplicationLBListener():
+	'''
+	ALBListener is a process on ApplicationLoadBalancer which listens on a particular port (default:80) to accept incoming requests. Their number increases as we make ALB to listen on more then on 		ports (So, 80 - 1 listener process, 80 and 443 = 2 listener processes).The listener then forwards the request to public subnets in AZs.
+	Note: The Subnets in VPC which is attached to ALBalancer must be publicaly routable.
+	'''
 	if ("AWS::ElasticLoadBalancingV2::Listener" in item):
 		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
 		tg = (data["Resources"][resource_name]["Properties"]["DefaultActions"][0]["TargetGroupArn"]["Ref"])
 		type = (data["Resources"][resource_name]["Properties"]["DefaultActions"][0]["Type"])
 		arn =  (data["Resources"][resource_name]["Properties"]["LoadBalancerArn"]["Ref"])
-		print (resource_name + "|" + resource_type + "|" + type + "|" + tg + "|" + arn)
+		print (resource_name + "|" + resource_type + "|" + arn + "|" + type + "|" + tg)
 
  
 
 def _get_ALBTargetGroup ():
+	'''
+	ALBTarget Groups are defined during LoadBalancer creation. Once defined it can't be changed. The options to define as TargetGroup are:
+	1. Instance (InstanceID)
+	2. IP (either Subnet or CIDR block (with exception of publicly routable IP addresses)).
+
+	'''
 	if ("AWS::ElasticLoadBalancingV2::TargetGroup" in item):
 		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
 		vpcid = (data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
@@ -526,8 +544,47 @@ def _get_slave_DB():
 			primary_db_name = (data["Resources"][resource_name]["Properties"]["SourceDBInstanceIdentifier"]["Ref"])
 			print (resource_name + "|" + resource_type + "|" + primary_db_name+"-"+"Replica")								    
 
-  
 
+def _get_VPNGateway():
+	'''
+	# Parses template to return VPNGateway attributes.
+	'''
+	if ("AWS::EC2::VPNGateway" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		print (resource_name + "|" + resource_type)
+			
+def _get_CustomerGateway():
+	'''
+	'''
+	if ("AWS::EC2::CustomerGateway" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		print (resource_name + "|" + resource_type)
+
+
+def _get_VPNConnection():
+	'''
+	'''
+	cg_id = vpn_gw_id = ""
+	if ("AWS::EC2::VPNConnection" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		if ("CustomerGatewayId" in data["Resources"][resource_name]["Properties"]):
+			cg_id = data["Resources"][resource_name]["Properties"]["CustomerGatewayId"]["Ref"]
+		if ("VpnGatewayId" in data["Resources"][resource_name]["Properties"]):
+			vpn_gw_id = data["Resources"][resource_name]["Properties"]["VpnGatewayId"]["Ref"]
+		print (resource_name + "|" + resource_type + "|" + cg_id + "|" + vpn_gw_id)
+
+
+def _get_VPNConnectionRoute():
+	'''
+	'''
+	vpnconnid = destcidrblk = ""
+	if ("AWS::EC2::VPNConnectionRoute" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		if ("VpnConnectionId" in data["Resources"][resource_name]["Properties"]):
+			vpnconnid = data["Resources"][resource_name]["Properties"]["VpnConnectionId"]["Ref"]
+		if ("DestinationCidrBlock" in data["Resources"][resource_name]["Properties"]):
+			destcidrblk = data["Resources"][resource_name]["Properties"]["DestinationCidrBlock"]["Ref"]
+		print(resource_name + "|" + resource_type + "|" + vpnconnid + "|" + destcidrblk)
 
 
 # This stanza keeps stacking the new services as they are added.
@@ -556,7 +613,11 @@ takeaction =	{
 				"Bucket"						: _get_s3_bucket,
 				"LoadBalancer"					: _get_load_balancer,
 				"DBInstance"					: _get_master_DB,
-				"DBSecurityGroup"				: _get_DB_Security_Group
+				"DBSecurityGroup"				: _get_DB_Security_Group,
+				"VPNGateway"					: _get_VPNGateway,
+				"CustomerGateway"				: _get_CustomerGateway,
+				"VPNConnection"					: _get_VPNConnection,
+				"VPNConnectionRoute"			: _get_VPNConnectionRoute
 				}
 
 
@@ -585,7 +646,7 @@ for item in (res_res_type):
 	if (re.search (r'RouteTable$\b', item)):
 		routetable = ((item.split()[1]).split("::")[-1])
 		takeaction.get(routetable, errhandler)()
-	if (re.search (r'Route$\b', item)):
+	if (re.search (r'\WRoute$\b', item)):
 		rt = ((item.split()[1]).split("::")[-1])
 		takeaction.get(rt, errhandler)()
 	if (re.search (r'SubnetRouteTableAssociation$\b', item)):
@@ -642,11 +703,19 @@ for item in (res_res_type):
 	if (re.search (r'DBInstance$\b', item)):
 		dbi = ((item.split()[1]).split("::")[-1])
 		takeaction.get(dbi, errhandler)()
-
-
-
-
-        
+	if (re.search (r'VPNGateway$\b', item)):
+		vpng = ((item.split()[1]).split("::")[-1])
+		takeaction.get(vpng, errhandler)()
+	if (re.search (r'CustomerGateway$\b', item)):
+		cg = ((item.split()[1]).split("::")[-1])
+		takeaction.get(cg, errhandler)()
+	if (re.search (r'VPNConnection$\b', item)):
+		vpnc = ((item.split()[1]).split("::")[-1])
+		takeaction.get(vpnc, errhandler)()
+	if (re.search (r'VPNConnectionRoute$\b', item)):
+		vpncr = ((item.split()[1]).split("::")[-1])
+		takeaction.get(vpncr, errhandler)()
+       
 
 
 
