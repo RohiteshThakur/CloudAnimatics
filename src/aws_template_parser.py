@@ -7,6 +7,7 @@ import sys
 import subprocess
 import re
 import os
+from copy import deepcopy
 
 #import param_parser
 
@@ -59,6 +60,19 @@ arg = sys.argv[1]
 #os.system(python3 param_parser sys.argv[1])
 # subprocess.call(param_parser arg)
 subprocess.call("{0} {1}".format(param_parser, arg), shell=True)							# Example of Variable substitution when method expects Absolute names
+
+subnets_list = subprocess.check_output("{0} {1}".format(param_parser, arg), shell=True)
+#print (str(subnets_list).split('\\n'))
+param_subnet_list = subnet_from_param = ""
+delim_op = str(subnets_list).split('\\n')
+for i in range(len(delim_op)):
+	if ('List<AWS::EC2::Subnet::Id>' in delim_op[i]):
+		#print (line)
+		param_subnet_list = str(delim_op[i]).split("|")[2].rstrip('\\n\'')
+		#subnet_from_param = str(delim_op[i]).split("|")[0].lstrip('\\n\'')
+		subnet_from_param = str(delim_op[i]).split("|")[0]
+		#print (param_subnet_list)
+		#print(subnet_from_param, param_subnet_list)
 
 # Section 1 - Ends.
 
@@ -140,10 +154,32 @@ for item in (resource_list):
 		#res_res_type.append("["+item+"]"+" "+ "["+res_type+"]")
 		res_res_type.append(item +" "+ res_type)
 		res_res_type_str += item +" "+ res_type + "\t"
-        
+
+
+res_res_type_copy = deepcopy(res_res_type)							# For sub-processing on the list to decide on Subnet.
 
 '''
+It was found that some of the Templates were not following the order in AWS templates. 
+This section will re-order in the list before passing it for parsing. In below case, route and subnet to route assiciation entries were not in proper order.
+Any formatting required should be done here.
+'''
+route_index = srta_index = 0
+for i in range(len(res_res_type)):
+	#print (res_res_type[i])
+	if ('AWS::EC2::Route' in res_res_type[i] and 'AWS::EC2::RouteTable' not in res_res_type[i]):
+		#print (i, res_res_type[i])
+		route_index = i
+	if ('AWS::EC2::SubnetRouteTableAssociation' in res_res_type[i]):
+		srta_index = i
+		#print (i, res_res_type[i])
+	if (bool(route_index) and bool(srta_index) and (route_index > srta_index)):
+		res_res_type[srta_index], res_res_type[route_index] = res_res_type[route_index], res_res_type[srta_index]
+		i = srta_index = route_index = 0
+
+#sys.exit()
+
 ##########################################################    Do Not remove this - Very important for testing.   ##########################################################
+'''
 print ("\n\nprinting [resource][resource type]")
 for i in (res_res_type):
     print (i)
@@ -156,10 +192,9 @@ print (res_res_type_str)
 #global config_file
 #_file = open(config_file, 'a')
 
+
 def errhandler ():
    print(item,": is not a recognized service!")
-
-
 
 
 def _get_VPC ():
@@ -168,9 +203,9 @@ def _get_VPC ():
 		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
 		#_file.write (resource_name+"\n")
 		if ("Tags" in data["Resources"][resource_name]["Properties"]):
-			vpc = (resource_name + "|" + resource_type + "|" + "StackID:" + (data["Resources"][resource_name]["Properties"]["Tags"][0]["Value"]["Ref"]))
+			 vpc = (resource_name + "|" + resource_type + "|" + "StackID:" + (data["Resources"][resource_name]["Properties"]["Tags"][0]["Value"]["Ref"]))
 		else:
-			vpc = (resource_name + "|" + resource_type)
+			 vpc = (resource_name + "|" + resource_type + "|")
 		print (vpc)
 
 def _get_VPC_StackID ():
@@ -186,16 +221,57 @@ def _get_VPC_StackID ():
             #_file.write (data["Resources"]["VPC"]["Properties"]["Tags"][0]["Value"]["Ref"]+"\n")
             print (data["Resources"]["VPC"]["Properties"]["Tags"][0]["Value"]["Ref"]+"\n")
 
-def _get_Subnet (): 
+def _get_Subnet ():
+	public_subnet_pattern  = r'public'
+	private_subnet_pattern = r'private' 
+	public_wo_case = re.compile(public_subnet_pattern, re.IGNORECASE)
+	private_wo_case = re.compile(private_subnet_pattern, re.IGNORECASE)
+	vpn_gateway_attachment = route_table_id = vpn_gateway_id = ""
 	#for item in (res_res_type):
 	if ("AWS::EC2::Subnet" in item):		
 		#resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
 		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
-		#print ("\n\n", resource_name)
+		#print ("\n", resource_name, resource_type)
 		#_file.write (resource_name + ":" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
-		#print (resource_name + "|" + resource_type  + "|" + data["Resources"][resource_name] ["Properties"]["CidrBlock"]["Fn::FindInMap"][1] + "|" + data["Resources"][resource_name] \
-		#["Properties"]["VpcId"]["Ref"])
-		print (resource_name + "|" + resource_type  + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+
+		# This section of code, finds "Public" or "Private" subnet based on entries in template file. If no mapping is found, assume subnet is Public.
+		if ("CidrBlock" in data["Resources"][resource_name]["Properties"]):
+			if ("Fn::FindInMap" in data["Resources"][resource_name]["Properties"]["CidrBlock"]):
+				for elem in range(len(data["Resources"][resource_name]["Properties"]["CidrBlock"]["Fn::FindInMap"])):
+					if (re.search(public_wo_case, data["Resources"][resource_name]["Properties"]["CidrBlock"]["Fn::FindInMap"][elem]) or \
+						re.search(private_wo_case, data["Resources"][resource_name]["Properties"]["CidrBlock"]["Fn::FindInMap"][elem])):
+						print (resource_name + "|" + resource_type  + "|" + data["Resources"][resource_name]["Properties"]["CidrBlock"]["Fn::FindInMap"][elem] + \
+						"|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+			else:
+				for res in res_res_type_copy:
+					if (re.search('\bAWS::EC2::VPNGateway$\b', res)):
+						vpn_gateway_id = str(res).split(" ")[0]
+						#print (vpn_gateway_id)
+					if ('AWS::EC2::VPCGatewayAttachment' in res):
+						res_name, res_type = str(res).split(" ")[0], str(res).split(" ")[-1]
+						if ("VpnGatewayId" in data["Resources"][res_name]["Properties"]):
+							if (vpn_gateway_id in data["Resources"][res_name]["Properties"]["VpnGatewayId"]["Ref"]):
+								vpn_gateway_attachment = res_name
+								#print(vpn_gateway_attachment)
+					if ('AWS::EC2::SubnetRouteTableAssociation' in res):
+						res_name, res_type = str(res).split(" ")[0], str(res).split(" ")[-1]
+						if (resource_name == data["Resources"][res_name]["Properties"]["SubnetId"]["Ref"]):			#Compare Subnet name.
+							route_table_id = data["Resources"][res_name]["Properties"]["RouteTableId"]["Ref"]
+							#print(route_table_id)
+					if ('AWS::EC2::Route' in res):
+						res_name, res_type = str(res).split(" ")[0], str(res).split(" ")[-1]
+						#print (res_name, res_type)
+						if ("DependsOn" in data["Resources"][res_name]):
+							#print (data["Resources"][res_name]["DependsOn"])
+							#print (data["Resources"][res_name]["Properties"]["RouteTableId"]["Ref"])
+							if (data["Resources"][res_name]["DependsOn"] == vpn_gateway_attachment \
+								and data["Resources"][res_name]["Properties"]["RouteTableId"]["Ref"] == route_table_id):
+								print (resource_name + "|" + resource_type  + "|" + "Private" + "|" \
+									+ data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+								return
+		# Assume its public:
+		else:				
+			print (resource_name + "|" + resource_type  + "|" + "Public" + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
 
 
 def _get_subnet_nacl_assn ():
@@ -212,16 +288,19 @@ def _get_InternetGateway ():
 		print (resource_name + "|" + resource_type + "|")
 
 def _get_InternetGateway_Attachment ():
-	vpc_id = vpn_gw_id = ""
+	vpc_id = gw_id = ""
 	if ("AWS::EC2::VPCGatewayAttachment" in  item):
 		resource_name, resource_type = str(item).split(" ")[0], str(item).split(" ")[-1]
 		if ("VpcId" in data["Resources"][resource_name]["Properties"]):
 			vpc_id = data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"]
-		if ("VpnGatewayId" in data["Resources"][resource_name]["Properties"]):
-			vpn_gw_id = data["Resources"][resource_name]["Properties"]["VpnGatewayId"]["Ref"]
-			print (resource_name + "|" + resource_type + "|" + vpc_id + "|" + vpn_gw_id)
+		if ("VpnGatewayId" in data["Resources"][resource_name]["Properties"]): 
+			gw_id = data["Resources"][resource_name]["Properties"]["VpnGatewayId"]["Ref"]
+			print (resource_name + "|" + resource_type + "|" + vpc_id + "|" + gw_id)
+		elif ("InternetGatewayId" in data["Resources"][resource_name]["Properties"]):
+			gw_id = data["Resources"][resource_name]["Properties"]["InternetGatewayId"]["Ref"]
+			print (resource_name + "|" + resource_type + "|" + vpc_id + "|" + gw_id)
 		else:
-			print (resource_name + "|" + resource_type + "|" + vpc_id)
+			print (resource_name + "|" + resource_type + "|" + vpc_id + "|" + "|")
 	
 
 def _get_RouteTable ():
@@ -239,7 +318,7 @@ def _get_Route ():
 				#print (routetable_str)
 			
 		rtid = data["Resources"][resource_name]["Properties"]["RouteTableId"]["Ref"]
-		routetable_str += rtid
+		routetable_str += rtid		# Make sure this is always appened in the LAST COLUMN.
 		print (routetable_str)
 
 
@@ -263,7 +342,6 @@ def _get_NetworkAcl ():
 		#nacl = resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"] + "|" + data["Resources"][resource_name]["Properties"]["Tags"][0]["Value"]
 		nacl = resource_name + "|" + resource_type + "|" + vpc_id + "|" + stack_id
 		print (nacl)
-
 
 def _get_ElasticIP ():
 	if ("AWS::EC2::EIP" in  item):
@@ -343,7 +421,8 @@ def _get_Security_Group ():
 	if ("AWS::EC2::SecurityGroup" in item):
 		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
 		if ("VpcId" in data["Resources"][resource_name]["Properties"]):
-			sg = (resource_name + "|" + resource_type + "|" + "VPC:" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+			#sg = (resource_name + "|" + resource_type + "|" + "VPC:" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
+			sg = (resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"])
 			print (sg)
 		#if ("SourceSecurityGroupName" in data["Resources"][resource_name]["Properties"]["SecurityGroupIngress"]):
 		#	sg = (resource_name + "|" + resource_type + "|" + data["Resources"][resource_name]["Properties"]["SecurityGroupIngress"][0]["SourceSecurityGroupName"]["Ref"])
@@ -425,13 +504,17 @@ def _get_AutoScalingGroup ():
 		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
 		if ("VPCZoneIdentifier" in data["Resources"][resource_name]["Properties"]):
 			if (isinstance(data["Resources"][resource_name]["Properties"]["VPCZoneIdentifier"], OrderedDict)):			# If VPCZoneIdentifier is an Orderdict. If not consider it as a List.
-				asg_subnets = data["Resources"][resource_name]["Properties"]["VPCZoneIdentifier"]["Ref"]	
+				asg_subnets = data["Resources"][resource_name]["Properties"]["VPCZoneIdentifier"]["Ref"]
+				# Check if the AutoScaling Group receives its Subnets from Parameters, Substitue that:
+				if (asg_subnets == subnet_from_param):
+					asg_subnets = param_subnet_list
+
 				for i in range(len(data["Resources"][resource_name]["Properties"]["TargetGroupARNs"])):
 					tgarn = tgarn + data["Resources"][resource_name]["Properties"]["TargetGroupARNs"][i]["Ref"] + " "
 
 				print (resource_name + "|" + resource_type + "|" + asg_subnets + "|" + tgarn)
 
-			else:
+			elif ("DependsOn" in data["Resources"][resource_name]):					# This keyword must be present for ASG with Public IPs.
 				for i in (data["Resources"][resource_name].items()):
 					if ("DependsOn" in i):
 						asg = "DependsOn:" + (data["Resources"][resource_name]["DependsOn"])
@@ -446,7 +529,7 @@ def _get_AutoScalingGroup ():
 				for j in range(len(data["Resources"][resource_name]["Properties"]["TargetGroupARNs"])):
 					tg  = tg + (data["Resources"][resource_name]["Properties"]["TargetGroupARNs"][j]["Ref"])
 
-			print (resource_name + "|" + resource_type + "|" + "|" + asg + "|" + vpczoneid + "|" + lcn + "|" + min + "|" + max + "|" + tg)
+				print (resource_name + "|" + resource_type + "|" + "|" + asg + "|" + vpczoneid + "|" + lcn + "|" + min + "|" + max + "|" + tg)
 
 
 
@@ -465,17 +548,22 @@ def _get_load_balancer():
 	#'''
 	#Parses LoadBalancer stanza in the AWS template file. Returns: Resource name, type, subnets and security groups delimited by "|"
 	#'''
-	_subnets  = "Subnet:"
+	#subnets  = "Subnets:"
+	_subnets  = ""
 	_Sec_grps = "SecurityGroup:"
 	if ("AWS::ElasticLoadBalancingV2::LoadBalancer" in item):
 		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
 		if (isinstance(data["Resources"][resource_name]["Properties"]["Subnets"], OrderedDict)):
 			_subnets += (data["Resources"][resource_name]["Properties"]["Subnets"]["Ref"])
-			#print (resource_name + "|" + resource_type + "|" + _subnets)
 		else:
 			if (data["Resources"][resource_name]["Properties"]["Subnets"]):
 				for j in range(len(data["Resources"][resource_name]["Properties"]["Subnets"])):
 					_subnets += ((data["Resources"][resource_name]["Properties"]["Subnets"][j]["Ref"] + " "))
+
+		#print (resource_name + "|" + resource_type + "|" + _subnets)
+		# Check if ELB receives its subnet(s) from Parameters list, substitute that:
+		if (_subnets == subnet_from_param):			# If parameter's subnet name if same as one found in ALB line.
+			_subnets = param_subnet_list			# Substitute it with Subnet list, parameter's subnet maps to.
 
 		if ("SecurityGroups" in data["Resources"][resource_name]["Properties"]):
 			if (isinstance(data["Resources"][resource_name]["Properties"]["SecurityGroups"], OrderedDict)):
@@ -484,7 +572,7 @@ def _get_load_balancer():
 			else:
 				for i in range(len(data["Resources"][resource_name]["Properties"]["SecurityGroups"])):
 					_Sec_grps += (data["Resources"][resource_name]["Properties"]["SecurityGroups"][i]["Ref"] + " ")
-		print (resource_name + "|" + resource_type + "|" + _subnets + "|" + _Sec_grps)				
+		print (resource_name + "|" + resource_type + "|" + _subnets + "|" + _Sec_grps + "|")				
 
 
 def _get_load_balancer_obsolete():
@@ -520,8 +608,9 @@ def _get_master_DB():
 	if ("AWS::RDS::DBInstance" in item):
 		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
 		# check if DB instance has a name and its multiAZ enabled. There is nothing I could find in template that will seal DB instance as a primary one. Hence I am using these two.
-		if (("DBName" in data["Resources"][resource_name]["Properties"]) and ("MultiAZ" in data["Resources"][resource_name]["Properties"])):
+		if ("DBName" in data["Resources"][resource_name]["Properties"]):
 			engine  = data["Resources"][resource_name]["Properties"]["Engine"]
+		if ("MultiAZ" in data["Resources"][resource_name]["Properties"]):
 			multiaz = data["Resources"][resource_name]["Properties"]["MultiAZ"]["Ref"]
 			#if (data["Resources"][resource_name]["Properties"]["VPCSecurityGroups"]):
 			#	vpc_sec_group = data["Resources"][resource_name]["Properties"]["VPCSecurityGroups"]["Fn::If"][0]["Is-EC2-VPC"][0]["Fn::GetAtt"][0]
@@ -586,8 +675,23 @@ def _get_VPNConnectionRoute():
 			destcidrblk = data["Resources"][resource_name]["Properties"]["DestinationCidrBlock"]["Ref"]
 		print(resource_name + "|" + resource_type + "|" + vpnconnid + "|" + destcidrblk)
 
+'''
+def _get_OPSWorksStack():
+	vpc = default_subnet = ""
+	if ("AWS::OpsWorks::Stack" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+		if ("VpcId" in data["Resources"][resource_name]["Properties"]):
+			vpc = data["Resources"][resource_name]["Properties"]["VpcId"]["Ref"]
+		if ("DefaultSubnetId" in data["Resources"][resource_name]["Properties"]):
+			default_subnet = data["Resources"][resource_name]["Properties"]["DefaultSubnetId"]["Ref"]
+		print (resource_name + "|" + resource_type + "|" + vpc + "|" + default_subnet)
 
-# This stanza keeps stacking the new services as they are added.
+def _get_OPSWorksLayer():
+	if ("AWS::OpsWorks::Layer" in item):
+		resource_name, resource_type = str(item).split(" ")[0].strip(" []"), str(item).split(" ")[-1]
+'''
+
+# This stanza keeps stacking the new services as they are added in the code.
 
 takeaction =	{
 				"VPC"							: _get_VPC, 
@@ -617,7 +721,8 @@ takeaction =	{
 				"VPNGateway"					: _get_VPNGateway,
 				"CustomerGateway"				: _get_CustomerGateway,
 				"VPNConnection"					: _get_VPNConnection,
-				"VPNConnectionRoute"			: _get_VPNConnectionRoute
+				"VPNConnectionRoute"			: _get_VPNConnectionRoute,
+				#"Stack"							: _get_OPSWorksStack
 				}
 
 
@@ -631,7 +736,7 @@ for item in (res_res_type):
 		vpc = ((item.split()[1]).split("::")[-1])
 		#print (vpc)
 		takeaction.get(vpc, errhandler)()
-	if (re.search (r'Subnet$\b', item)):									# Match
+	if (re.search (r'Subnet$\b', item)):												# Match
 		#print (item)
 		subnet = ((item.split()[1]).split("::")[-1])
 		#print (subnet)
@@ -715,9 +820,9 @@ for item in (res_res_type):
 	if (re.search (r'VPNConnectionRoute$\b', item)):
 		vpncr = ((item.split()[1]).split("::")[-1])
 		takeaction.get(vpncr, errhandler)()
-       
-
-
+	#if (re.search (r'OpsWorks::Stack$\b', item)):
+	#	ops = ((item.split()[1]).split("::")[-1])
+	#	takeaction.get(ops, errhandler)()
 
 
 
